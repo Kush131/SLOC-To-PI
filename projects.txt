@@ -1,0 +1,3 @@
+2
+technology/gemini/base
+technology/gemini/navikernel/base
