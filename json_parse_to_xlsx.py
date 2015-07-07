@@ -50,6 +50,9 @@ for _ in range(int(PROJ_NUMBER)):
         pp = pprint.PrettyPrinter(depth=6)
         for line in f:
             data.update(json.loads(line))
+            pp.pprint(data)
+            print("\n\n\n")
+            '''
             if 'trackingIds' not in data:
                 pass
             else:
@@ -78,4 +81,5 @@ for _ in range(int(PROJ_NUMBER)):
 
         print("\nTotal of " + str(ROW) +
               " rows were parsed and possibly entered\n")
+        '''
         WORKBOOK.close()

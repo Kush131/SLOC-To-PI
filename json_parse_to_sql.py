@@ -7,21 +7,22 @@
 # Author: Ryan Kush (Ryan.Kush@garmin.com)
 '''
 
-# TODO: Add in datetime conversion from excel json file.
-# TODO: Add in support for JIRA + Gerrit project imports.
-
 import json  # Used to read JSON file from query
 import os  # Used to execute command line commands in python.
 import sqlite3  # Used to put data into the database
+import time  # Used to sleep script for 5 seconds
+import re
+from query import query
 
 # Open the projects.txt file, which contains all the info we need for
 # gathering data from JIRA and Gerrit.
 A = open("projects.txt", 'rt')
 PROJ_NUMBER = A.readline().rstrip('\n')
 print(PROJ_NUMBER + " projects detected to scan\nIf this is incorrect, " +
-      "press CONTROL + C to end the program immediately to fix your issues\n")
+      "press CONTROL + C to end the program immediately to fix your issues\n" +
+      "Execution will pause for 5 seconds, then begin.\n")
 
-# TODO: Maybe insert a sleep in here to allow for people to read?
+time.sleep(5)  # Give user a chance to cancel command if error is detected.
 
 for _ in range(int(PROJ_NUMBER)):
 
@@ -31,6 +32,17 @@ for _ in range(int(PROJ_NUMBER)):
     # program.
     project_name = A.readline()
     project_name = project_name.rstrip('\n')
+
+    # Reads in the JIRA query keyword used in our query script. Should not
+    # contain slashes off the bat, so we should not need to edit this.
+    jira_name = "project=" + A.readline()
+    jira_name = jira_name.rstrip('\n')
+    jira_name = jira_name + " AND statusCategory=Complete"  # Optimization
+    jira_name = jira_name.rstrip('\n')
+    jira_name = jira_name + " AND timespent != NULL"  # Optimization
+    jira_name = jira_name.rstrip('\n')
+
+    print(jira_name)
 
     # Format the file name and strip the newline and slashes from the name.
     filename = project_name+".json"
@@ -76,6 +88,8 @@ for _ in range(int(PROJ_NUMBER)):
     count = 0  # Counts how many queries we run.
     data = {}  # Dictionary for us to put our data into
 
+    jiraQuery = query(jira_name)
+
     # The next few lines open the .JSON file, puts one JSON object into
     # the data variable, and then runs an insert query against the database
     # we created earlier. It will run until we hit the end of the file.
@@ -83,20 +97,40 @@ for _ in range(int(PROJ_NUMBER)):
         for line in f:
             data.update(json.loads(line))
             for info in data['patchSets']:
-                s = "insert into estimates VALUES('" + str(data['id']) + \
-                    "','" + str(data['project']) + \
-                    "','" + str(data['branch']) + \
-                    "'," + str(data['createdOn']) + \
-                    "," + str(data['lastUpdated']) + \
-                    "," + str(info['sizeInsertions']) + \
-                    "," + str(info['sizeDeletions']) + ")"
-                count += 1
-                conn.execute(s)  # Execute the string built above
+                if ('trackingIds' not in data or info['sizeInsertions'] == 0
+                        and info['sizeDeletions'] == 0):
+                    pass
+                else:
+                    estimatedEffort = -1
+                    for x in jiraQuery:
+                        gerritKey = data['trackingIds'][0]['id']
+                        jiraKey = x['key']
+                        #  print("Comparing " + jiraKey + " and " + gerritKey)
+                        if gerritKey == jiraKey and estimatedEffort == -1:
+                            print("Comparing " + jiraKey + " and " + gerritKey)
+                            estimatedEffort = int(
+                                x['fields']['aggregatetimespent'])
+                            print("True Comparison")
+                            break
 
-        print("\nTotal of " + str(count) +
-              " rows were parsed and possibly entered\n" +
-              "This does not account for duplicates.\n")
-        # Commits our changes to the database. Running this so late ensures
-        # that if there is an error in the middle of a query, there will be
-        # no error data in the database.
-        conn.commit()
+                    s = "insert into estimates VALUES('" + str(
+                        data['trackingIds'][0]['id']) + \
+                        "','" + str(data['project']) + \
+                        "','" + str(data['branch']) + \
+                        "'," + str(data['createdOn']) + \
+                        "," + str(data['lastUpdated']) + \
+                        "," + str(info['sizeInsertions']) + \
+                        "," + str(info['sizeDeletions']) + \
+                        "," + str(estimatedEffort) + ")"
+
+                    print(s)
+                    count += 1
+                    conn.execute(s)  # Execute the string built above
+
+    print("\nTotal of " + str(count) +
+          " rows were parsed and possibly entered\n" +
+          "This does not account for duplicates.\n")
+    # Commits our changes to the database. Running this so late ensures
+    # that if there is an error in the middle of a query, there will be
+    # no error data in the database.
+    conn.commit()
