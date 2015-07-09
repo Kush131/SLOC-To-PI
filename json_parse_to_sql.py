@@ -11,8 +11,8 @@ import json  # Used to read JSON file from query
 import os  # Used to execute command line commands in python.
 import sqlite3  # Used to put data into the database
 import time  # Used to sleep script for 5 seconds
-import re
-from query import query
+from query import query  # JIRA query file
+#  import pprint  # Used for pretty printing in debugging.
 
 # Open the projects.txt file, which contains all the info we need for
 # gathering data from JIRA and Gerrit.
@@ -87,8 +87,13 @@ for _ in range(int(PROJ_NUMBER)):
 
     count = 0  # Counts how many queries we run.
     data = {}  # Dictionary for us to put our data into
+    keyExists = {}
 
     jiraQuery = query(jira_name)
+
+    #  This block is for debugging purposes only!
+    #  pp = pprint.PrettyPrinter(depth=6)
+    #  pp.pprint(jiraQuery)
 
     # The next few lines open the .JSON file, puts one JSON object into
     # the data variable, and then runs an insert query against the database
@@ -96,41 +101,65 @@ for _ in range(int(PROJ_NUMBER)):
     with open(filename) as f:
         for line in f:
             data.update(json.loads(line))
-            for info in data['patchSets']:
-                if ('trackingIds' not in data or info['sizeInsertions'] == 0
-                        and info['sizeDeletions'] == 0):
-                    pass
-                else:
-                    estimatedEffort = -1
-                    for x in jiraQuery:
-                        gerritKey = data['trackingIds'][0]['id']
-                        jiraKey = x['key']
-                        #  print("Comparing " + jiraKey + " and " + gerritKey)
-                        if gerritKey == jiraKey and estimatedEffort == -1:
-                            print("Comparing " + jiraKey + " and " + gerritKey)
-                            estimatedEffort = int(
-                                x['fields']['aggregatetimespent'])
-                            print("True Comparison")
-                            break
+            if 'trackingIds' not in data:
+                pass
+            else:
+                totalAdd = 0
+                totalSub = 0
+                for info in data['patchSets']:
+                    totalAdd = + info['sizeInsertions']
+                    totalSub = + info['sizeDeletions']
 
+                estimatedEffort = -1
+                for x in jiraQuery:
+                    gerritKey = data['trackingIds'][0]['id']
+                    jiraKey = x['key']
+                    if gerritKey == jiraKey:
+                        if (x['fields']['aggregatetimespent'] !=
+                                x['fields']['aggregatetimeestimate']):
+                            estimatedEffort = (
+                                int(x['fields']['aggregatetimespent']))
+                        else:
+                            pass
+
+                if estimatedEffort == -1:
+                    pass
+
+                if data['trackingIds'][0]['id'] not in keyExists:
                     s = "insert into estimates VALUES('" + str(
                         data['trackingIds'][0]['id']) + \
                         "','" + str(data['project']) + \
                         "','" + str(data['branch']) + \
                         "'," + str(data['createdOn']) + \
                         "," + str(data['lastUpdated']) + \
-                        "," + str(info['sizeInsertions']) + \
-                        "," + str(info['sizeDeletions']) + \
+                        "," + str(totalAdd) + \
+                        "," + str(totalSub) + \
                         "," + str(estimatedEffort) + ")"
 
                     print(s)
                     count += 1
                     conn.execute(s)  # Execute the string built above
+                    keyExists[data['trackingIds'][0]['id']] = 1
 
-    print("\nTotal of " + str(count) +
-          " rows were parsed and possibly entered\n" +
-          "This does not account for duplicates.\n")
+                #  Add up patch changes and update SQL entry.
+                else:
+                    s = "update estimates SET " + \
+                        "insertions = insertions + " + str(totalAdd) + \
+                        " AND " + \
+                        "deletions = deletions + " + str(totalSub) + \
+                        " where id = \'" + \
+                        str(data['trackingIds'][0]['id']) + \
+                        "\'"
+
+                    print(s)
+                    count += 1
+                    conn.execute(s)  # Execute the string built above
+                    keyExists[data['trackingIds'][0]['id']] = 1
+
+        print("\nTotal of " + str(count) +
+              " rows were parsed and possibly entered\n" +
+              "This does not account for duplicates.\n")
     # Commits our changes to the database. Running this so late ensures
     # that if there is an error in the middle of a query, there will be
     # no error data in the database.
-    conn.commit()
+        conn.commit()
