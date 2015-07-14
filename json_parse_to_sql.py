@@ -1,26 +1,142 @@
-'''
-# Summary: Reads a file of project names taken from gerrit and stores the
-# results of the query to a database created locally.
-#
-# Date Last Updated: 6/3/15
-#
-# Author: Ryan Kush (Ryan.Kush@garmin.com)
-'''
+"""
+SLIM SQL Script.
+
+Reads the results of an SQL and JQL statement (that are stored as JSON) and
+puts the results inside of a SQL database.
+
+Date Last Updated: 7/14/15
+
+Author: Ryan Kush (Ryan.Kush@garmin.com)
+"""
 
 import json  # Used to read JSON file from query
 import os  # Used to execute command line commands in python.
 import sqlite3  # Used to put data into the database
 import time  # Used to sleep script for 5 seconds
 from query import query  # JIRA query file
-#  import pprint  # Used for pretty printing in debugging.
+
+
+def addToDB(filename, project_name, jiraQuery, keyExists):
+    """Add query information to database."""
+    noTrackID = 0  # Gerrit does not have a JIRA ID
+    estimateSame = 0  # Estimated time + work time is same
+    noMatchingKey = 0  # If we cannot find a JIRA that matches our ID
+    update = 0  # How many updates we process
+    insert = 0  # How many inserts we process
+    totalGerrit = 0  # How many Gerrit patches we process
+
+    # Create the database project name and strip out slashes + new lines.
+    db_filename = project_name + ".db"
+    db_filename = db_filename.rstrip('\n')
+    db_filename = db_filename.replace('/', '')
+
+    # Create a boolean that will tell us if we have already created the file.
+    db_is_new = not os.path.exists(db_filename)
+    conn = sqlite3.connect(db_filename)
+
+    # If timeEstimates.db does not exist we are going to setup the database.
+    # Use the schema.ini file to feed a database schema to the database.
+
+    if db_is_new:
+        print('Need to create schema')
+        with open("schema.ini", 'rt') as f:
+            schema = f.read()
+            conn.executescript(schema)
+
+    # Block for creating Gerrit patch dictionary.
+    data = {}  # Dictionary for us to put our data into
+
+    with open(filename) as f:
+        for line in f:
+            totalGerrit += 1
+            data.update(json.loads(line))
+            if 'trackingIds' not in data:
+                noTrackID += 1
+            else:
+                doWant = True
+                totalAdd = 0
+                totalSub = 0
+                for info in data['patchSets']:
+                    totalAdd = + info['sizeInsertions']
+                    totalSub = + info['sizeDeletions']
+
+                estimatedEffort = -1
+                for x in jiraQuery:
+                    gerritKey = data['trackingIds'][0]['id']
+                    jiraKey = x['key']
+                    if gerritKey == jiraKey:
+                        if (x['fields']['aggregatetimespent'] !=
+                                x['fields']['aggregatetimeestimate']):
+                            estimatedEffort = (
+                                int(x['fields']['aggregatetimespent']))
+                        else:
+                            estimateSame += 1
+                            doWant = False
+
+                if estimatedEffort == -1:
+                    noMatchingKey += 1
+                    doWant = False
+
+                if data['trackingIds'][0]['id'] not in keyExists and doWant:
+                    s = "insert into estimates VALUES('" + str(
+                        data['trackingIds'][0]['id']) + \
+                        "','" + str(data['project']) + \
+                        "','" + str(data['branch']) + \
+                        "'," + str(data['createdOn']) + \
+                        "," + str(data['lastUpdated']) + \
+                        "," + str(totalAdd) + \
+                        "," + str(totalSub) + \
+                        "," + str(estimatedEffort) + ")"
+
+                    print(s)
+                    insert += 1
+                    conn.execute(s)  # Execute the string built above
+                    keyExists[data['trackingIds'][0]['id']] = 1
+
+                #  Add up patch changes and update SQL entry.
+                elif data['trackingIds'][0]['id'] in keyExists and doWant:
+                    s = "update estimates SET " + \
+                        "insertions = insertions + " + str(totalAdd) + \
+                        " AND " + \
+                        "deletions = deletions + " + str(totalSub) + \
+                        " where id = \'" + \
+                        str(data['trackingIds'][0]['id']) + \
+                        "\'"
+
+                    update += 1
+                    print(s)
+                    conn.execute(s)  # Execute the string built above
+                    keyExists[data['trackingIds'][0]['id']] = 1
+
+                else:
+                    pass
+
+    print(filename + " Summary:\n")
+    print("\nTotal of " + str(insert) + " rows were inserted\nTotal of " +
+          str(update) + " were updated\n Total of " + str(noTrackID) +
+          " went unmatched due to lack of matching JIRA ID in Gerrit\n" +
+          " Total of " + str(estimateSame) + " went unmatched due to " +
+          " estimate matching time worked\n Total of " +
+          str(noMatchingKey) + " went unmatched due to not finding JIRA " +
+          "issue inside JIRA query.")
+
+    # Commits our changes to the database. Running this so late ensures
+    # that if there is an error in the middle of a query, there will be
+    # no error data in the database.
+    conn.commit()
+
+# -----------------------------------------------------------------------------
+# MAIN METHOD
+# -----------------------------------------------------------------------------
 
 # Open the projects.txt file, which contains all the info we need for
 # gathering data from JIRA and Gerrit.
+
 A = open("projects.txt", 'rt')
 PROJ_NUMBER = A.readline().rstrip('\n')
-print(PROJ_NUMBER + " projects detected to scan\nIf this is incorrect, " +
+print(PROJ_NUMBER + " projects detected to scan\n\nIf this is incorrect, " +
       "press CONTROL + C to end the program immediately to fix your issues\n" +
-      "Execution will pause for 5 seconds, then begin.\n")
+      "\nExecution will pause for 5 seconds, then begin.\n")
 
 time.sleep(5)  # Give user a chance to cancel command if error is detected.
 
@@ -42,124 +158,50 @@ for _ in range(int(PROJ_NUMBER)):
     jira_name = jira_name + " AND timespent != NULL"  # Optimization
     jira_name = jira_name.rstrip('\n')
 
-    print(jira_name)
-
     # Format the file name and strip the newline and slashes from the name.
-    filename = project_name+".json"
-    filename = filename.rstrip('\n')
+    filename = project_name.rstrip('\n')
     filename = filename.replace('/', '')
-
-    # Terminal command to be executed to grab JSON data from the gerrit
-    # server. Utilizes SSH attached to my username, so make sure you
-    # replace the username with your username and create an SSH key for
-    # your computer if you do not currently have it set up. Confluence
-    # should have answers about this if you are confused.
-    term_command = "ssh -p 29418 kush@gerrit.consumer.garmin.com " + \
-        "gerrit query " + "project:" + project_name + \
-        " limit:10000 status:merged --format json " + \
-        "--patch-sets --files --submit-records > " + filename
-
-    # Print out our terminal command just as a syntax check for user.
-    print(term_command)
-
-    # Create the database project name and strip out slashes + new lines.
-    db_filename = project_name+".db"
-    db_filename = db_filename.rstrip('\n')
-    db_filename = db_filename.replace('/', '')
-
-    # Execute our terminal command that we created above. At this point,
-    # we have a valid .JSON file with all of our project data without the
-    # time estimates. We will pull this info from JIRA later.
-    os.system(term_command)
-
-    # Create a boolean that will tell us if we have already created the file.
-    db_is_new = not os.path.exists(db_filename)
-    conn = sqlite3.connect(db_filename)
-
-    # If timeEstimates.db does not exist we are going to setup the database.
-    # Use the schema.ini file to feed a database schema to the database.
-
-    if db_is_new:
-        print('Need to create schema')
-        with open("schema.ini", 'rt') as f:
-            schema = f.read()
-            conn.executescript(schema)
-
-    count = 0  # Counts how many queries we run.
-    data = {}  # Dictionary for us to put our data into
-    keyExists = {}
 
     jiraQuery = query(jira_name)
 
-    #  This block is for debugging purposes only!
-    #  pp = pprint.PrettyPrinter(depth=6)
-    #  pp.pprint(jiraQuery)
+    totalJIRA = 0  # How many JIRA's we process
 
-    # The next few lines open the .JSON file, puts one JSON object into
-    # the data variable, and then runs an insert query against the database
-    # we created earlier. It will run until we hit the end of the file.
-    with open(filename) as f:
-        for line in f:
-            data.update(json.loads(line))
-            if 'trackingIds' not in data:
-                pass
-            else:
-                totalAdd = 0
-                totalSub = 0
-                for info in data['patchSets']:
-                    totalAdd = + info['sizeInsertions']
-                    totalSub = + info['sizeDeletions']
+    # A really bad way to get how many JIRA's we have from our query.
+    for x in jiraQuery:
+        totalJIRA += 1
 
-                estimatedEffort = -1
-                for x in jiraQuery:
-                    gerritKey = data['trackingIds'][0]['id']
-                    jiraKey = x['key']
-                    if gerritKey == jiraKey:
-                        if (x['fields']['aggregatetimespent'] !=
-                                x['fields']['aggregatetimeestimate']):
-                            estimatedEffort = (
-                                int(x['fields']['aggregatetimespent']))
-                        else:
-                            pass
+    # To future programmer: Dear lord change this. We are in crunch time for
+    # results for this project and this is a terrible terrible way to get them.
+    # Please find a more efficient way to detect when we are out of gerrit
+    # patches. The result of the system command returns a JSON object with rows
+    # parsed so that is a good start.
 
-                if estimatedEffort == -1:
-                    pass
+    keyExists = {}  # Does the JIRA issue already exist?
 
-                if data['trackingIds'][0]['id'] not in keyExists:
-                    s = "insert into estimates VALUES('" + str(
-                        data['trackingIds'][0]['id']) + \
-                        "','" + str(data['project']) + \
-                        "','" + str(data['branch']) + \
-                        "'," + str(data['createdOn']) + \
-                        "," + str(data['lastUpdated']) + \
-                        "," + str(totalAdd) + \
-                        "," + str(totalSub) + \
-                        "," + str(estimatedEffort) + ")"
+    queryTotal = 0
+    while queryTotal < totalJIRA:
 
-                    print(s)
-                    count += 1
-                    conn.execute(s)  # Execute the string built above
-                    keyExists[data['trackingIds'][0]['id']] = 1
+        # Terminal command to be executed to grab JSON data from the gerrit
+        # server. Utilizes SSH attached to my username, so make sure you
+        # replace the username with your username and create an SSH key for
+        # your computer if you do not currently have it set up. Confluence
+        # should have answers about this if you are confused.
 
-                #  Add up patch changes and update SQL entry.
-                else:
-                    s = "update estimates SET " + \
-                        "insertions = insertions + " + str(totalAdd) + \
-                        " AND " + \
-                        "deletions = deletions + " + str(totalSub) + \
-                        " where id = \'" + \
-                        str(data['trackingIds'][0]['id']) + \
-                        "\'"
+        new_file = filename + str(queryTotal) + ".json"
 
-                    print(s)
-                    count += 1
-                    conn.execute(s)  # Execute the string built above
-                    keyExists[data['trackingIds'][0]['id']] = 1
+        term_command = "ssh -p 29418 kush@gerrit.consumer.garmin.com " + \
+            "gerrit query " + "project:" + project_name + \
+            " status:merged --format=json --patch-sets --files" + \
+            " --submit-records >> " + new_file
 
-        print("\nTotal of " + str(count) +
-              " rows were parsed and possibly entered\n" +
-              "This does not account for duplicates.\n")
-    # Commits our changes to the database. Running this so late ensures
-    # that if there is an error in the middle of a query, there will be
-    # no error data in the database.
-        conn.commit()
+        # Print out our terminal command just as a syntax check for user.
+        print(term_command)
+
+        # Execute our terminal command that we created above. At this point,
+        # we have a valid .JSON file with all of our project data without the
+        # time estimates. We will pull this info from JIRA later.
+        os.system(term_command)
+        addToDB(new_file, project_name, jiraQuery, keyExists)
+        queryTotal += 500
+
+# pylama:ignore=C901
