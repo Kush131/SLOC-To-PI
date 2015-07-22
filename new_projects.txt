@@ -1,0 +1,4 @@
+1
+technology/gemini/base
+timespent != NULL AND statusCategory = Complete AND issuetype not in (Bug,"Action Item","Unreleased Defect","Released Defect") AND project in (Gemini)
+timespent != NULL AND statusCategory = Complete AND issuetype in (Bug,"Action Item","Unreleased Defect","Released Defect") AND project in (Gemini)
