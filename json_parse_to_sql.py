@@ -163,12 +163,7 @@ for _ in range(int(PROJ_NUMBER)):
     filename = filename.replace('/', '')
 
     jiraQuery = query(jira_name)
-
-    totalJIRA = 0  # How many JIRA's we process
-
-    # A really bad way to get how many JIRA's we have from our query.
-    for x in jiraQuery:
-        totalJIRA += 1
+    totalJIRA = len(jiraQuery)
 
     # To future programmer: Dear lord change this. We are in crunch time for
     # results for this project and this is a terrible terrible way to get them.
